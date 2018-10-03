@@ -3,6 +3,22 @@ import numpy as np
 from scipy.sparse.csgraph import shortest_path
 
 
+try:
+    from .pacman import MsPacman
+except Exception as e:
+    print ("Count not import MsPacman",e)
+    pass
+
+
+try:
+    from .robotics import FetchReach,FetchSlide,FetchPush
+except Exception as e:
+    print("Could not import robotics.",e)
+    pass 
+
+
+
+
 class FlipBit:
     def __init__(self, n_bits, max_steps):
         self.n_actions = n_bits
@@ -19,7 +35,7 @@ class FlipBit:
 
         state, goal = np.array(self.state), np.array(self.goal)
 
-        return state, goal, 0.0
+        return state, state, goal, 0.0
 
     def step(self, a):
         if a >= self.n_actions:
@@ -35,8 +51,9 @@ class FlipBit:
             reward = 0.0
 
         done = (self.max_steps <= self.n_steps) or (reward > 0.0)
-
-        return np.array(self.state), reward, done
+        
+        state = np.array(self.state)
+        return state, state, reward, done
 
     def evaluate_length(self, episode, goal):
         for t in range(1, episode.length):
@@ -88,6 +105,8 @@ class FlipBit:
     def __repr__(self):
         return 'State: {0}. Goal: {1}.'.format(self.state, self.goal)
 
+    def seed(self,seed):
+        pass
 
 class Maze:
     def __init__(self, layout, max_steps, entries, exits=None, epsilon=0.0):
@@ -160,7 +179,7 @@ class Maze:
         i = np.random.choice(len(self.exits))
         self.goal = sorted(self.exits)[i]
 
-        return np.array(self.position), np.array(self.goal), 0.0
+        return np.array(self.position), np.array(self.position), np.array(self.goal), 0.0
 
     def step(self, a):
         """a: up, down, left, right"""
@@ -187,7 +206,7 @@ class Maze:
 
         done = (self.max_steps <= self.n_steps) or (reward > 0.0)
 
-        return np.array(self.position), reward, done
+        return np.array(self.position), np.array(self.position), reward, done
 
     def evaluate_length(self, episode, goal):
         for t in range(1, episode.length):
@@ -244,6 +263,9 @@ class Maze:
             s.append('\n')
 
         return ''.join(s)
+
+    def seed(self,seed):
+        pass
 
 
 def make_empty_maze(h, w, max_steps):
@@ -376,6 +398,48 @@ def make_env(env_string, max_steps):
     match = re.match('four_rooms_maze', env_string)
     if match:
         env = make_four_rooms_maze(max_steps=max_steps)
+
+
+
+
+    match = re.match('fetchreach', env_string)
+    if match:
+        impulse_sizes=[0.1,1.0]
+        env = FetchReach(max_steps=max_steps,
+                         action_mode="impulsemixed",
+                         action_stepsize=impulse_sizes,
+                         reward_mode="sparse")
+
+
+    match = re.match('fetchpush', env_string)
+    if match:
+        impulse_sizes=[0.1,1.0]
+        env = FetchPush(max_steps=max_steps,
+                         action_mode="impulsemixed",
+                         action_stepsize=impulse_sizes,
+                         reward_mode="sparse")
+
+
+
+    match = re.match('fetchslide', env_string)
+    if match:
+        impulse_sizes=[0.1,1.0]
+        env = FetchSlide(max_steps=max_steps,
+                         action_mode="impulsemixed",
+                         action_stepsize=impulse_sizes,
+                         reward_mode="sparse")
+
+
+    match = re.match("mspacman",env_string)
+    if match:
+        cur_folder = "/".join(__file__.split("/")[:-1])
+        rom_file = cur_folder+"/ms_pacman.bin"
+        env = MsPacman(rom_path=rom_file.encode(),
+                        max_steps=max_steps,
+                        randomstart=False)
+
+
+
 
     if env is None:
         raise Exception('Invalid environment string.')

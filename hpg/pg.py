@@ -6,42 +6,43 @@ from hpg.agent import Agent
 
 class BatchVariables:
     def __init__(self, d_observations, d_goals, n_actions):
-        self.d_observations = d_observations
-        self.d_goals = d_goals
+
+        self.d_observations = np.reshape(d_observations,-1).tolist()
+        self.d_goals = np.reshape(d_goals,-1).tolist()
+
         self.n_actions = n_actions
 
-        self.d_input = d_observations + d_goals
 
         self.lengths = tf.placeholder(tf.int32, [None], name='lengths')
 
         self.actions = tf.placeholder(tf.int32, [None, None], name='actions')
         self.actions_enc = tf.one_hot(self.actions, self.n_actions)
 
-        self.observations = tf.placeholder(tf.float32, [None, None,
-                                                        d_observations],
+        self.observations = tf.placeholder(tf.float32, [None, None]+
+                                                        self.d_observations,
                                            name='observations')
 
         self.rewards = tf.placeholder(tf.float32, [None, None], name='rewards')
         self.baselines = tf.placeholder(tf.float32, [None, None],
                                         name='baselines')
 
-        self.goals = tf.placeholder(tf.float32, [None, self.d_goals],
+        self.goals = tf.placeholder(tf.float32, [None]+self.d_goals,
                                     name='goals')
 
         self.batch_size = tf.shape(self.observations)[0]
         self.max_steps = tf.shape(self.observations)[1]
 
         self.goals_enc = tf.tile(self.goals, [1, self.max_steps])
-        self.goals_enc = tf.reshape(self.goals_enc, [-1, self.max_steps,
-                                                     self.d_goals])
-
-        self.inputs = tf.concat([self.observations, self.goals_enc], axis=2)
+        self.goals_enc = tf.reshape(self.goals_enc, [-1, self.max_steps]+
+                                                     self.d_goals)
 
 
 class PolicyNetworkAgent(Agent):
-    def __init__(self, env, hidden_layers, learning_rate, baseline,
+    def __init__(self, env, hidden_layers, learning_rate, baseline, use_vscale_init,
                  init_session):
         Agent.__init__(self, env)
+
+        self.use_vscale_init = use_vscale_init 
 
         self.hidden_layers = hidden_layers
         self.learning_rate = learning_rate
@@ -59,16 +60,44 @@ class PolicyNetworkAgent(Agent):
         self.bvars = BatchVariables(self.env.d_observations, self.env.d_goals,
                                     self.env.n_actions)
 
-        output = tf.reshape(self.bvars.inputs, [-1, self.bvars.d_input])
+        if len(self.bvars.d_observations)==1:
+            print("Got 1d input space. Creating FC network")
+            self.create_network_1d()
+        else:
+            print("Got 2d input space. Creating Conv network")
+            self.create_network_conv()
+
+
+    def create_network_1d(self):
+
+        d_input = self.bvars.d_observations[0] + self.bvars.d_goals[0]
+
+        inputs = tf.concat([self.bvars.observations, self.bvars.goals_enc], axis=2)
+
+        output = tf.reshape(inputs, [-1, d_input])
 
         self.variables = []
-        layers = [self.bvars.d_input] + self.hidden_layers +\
-            [self.bvars.n_actions]
+        layers = [d_input] + self.hidden_layers +\
+                            [self.bvars.n_actions]
+                            
         for i in range(1, len(layers)):
-            W = tf.Variable(tf.truncated_normal([layers[i - 1], layers[i]],
+            W,b = None,None
+            if self.use_vscale_init:
+                W_init = tf.variance_scaling_initializer(mode="fan_avg",
+                    distribution="uniform")
+
+                W = tf.get_variable('pW_{0}'.format(i), [layers[i - 1], layers[i]],
+                                    initializer=W_init)
+
+
+                b = tf.get_variable('pb_{0}'.format(i), layers[i],
+                    initializer=tf.constant_initializer(0.0))
+
+            else:
+                W = tf.Variable(tf.truncated_normal([layers[i - 1], layers[i]],
                                                 stddev=0.01),
-                            name='pW_{0}'.format(i))
-            b = tf.Variable(tf.zeros(layers[i]), name='pb_{0}'.format(i))
+                                name='pW_{0}'.format(i))
+                b = tf.Variable(tf.zeros(layers[i]), name='pb_{0}'.format(i))
 
             self.variables += [W, b]
 
@@ -82,6 +111,61 @@ class PolicyNetworkAgent(Agent):
         self.policy = tf.reshape(output, [-1, self.bvars.max_steps,
                                           self.bvars.n_actions])
 
+
+
+    def create_network_conv(self):
+        n_filters=[32, 64, 64]
+        filter_sizes=[ 8, 4, 3]
+        strides = [4,2,1]
+        hidden_layer_sizes = self.hidden_layers
+
+        assert type(hidden_layer_sizes) is list
+
+
+        reshaped_observations = tf.reshape(self.bvars.observations,
+                                    [-1]+self.bvars.d_observations)
+        reshaped_observations = reshaped_observations/255
+
+        with tf.device('/cpu:0'):
+            with tf.variable_scope("state_processor"):
+                prev_y = tf.image.resize_images(reshaped_observations, (84, 84),
+                                 method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+
+
+        for i,(fs,ks,strides) in enumerate(zip(n_filters,filter_sizes,strides)):
+            init = tf.variance_scaling_initializer(mode="fan_avg",distribution="uniform")
+            prev_y = tf.layers.conv2d(prev_y,fs,ks,
+                                    strides=strides,
+                                    activation=tf.tanh,
+                                    name="rep_conv_"+str(i),
+                                    kernel_initializer=init)
+
+        obs_enc_flat = tf.contrib.layers.flatten(prev_y)
+
+        goals_reshaped = tf.reshape(self.bvars.goals_enc,
+                                    [-1]+self.bvars.d_goals)
+
+        inputs = tf.concat([obs_enc_flat, goals_reshaped], axis=1)
+
+
+
+        prev_y = inputs
+        for i,layer_size in enumerate(hidden_layer_sizes):
+            init = tf.variance_scaling_initializer(mode="fan_avg",distribution="uniform")
+            prev_y = tf.layers.dense(prev_y,layer_size,
+                            activation=tf.tanh,
+                            kernel_initializer=init,
+                            name="rep_dense_"+str(i))
+
+
+        self.policy = tf.layers.dense(prev_y,self.bvars.n_actions,name="op",activation=None)
+        self.policy = tf.nn.softmax(self.policy)+ 1e-12 
+        self.policy = tf.reshape(self.policy, [-1, self.bvars.max_steps,
+                                               self.bvars.n_actions])
+
+        self.variables = tf.trainable_variables()
+
+
     def feed(self, episodes):
         feed = {}
 
@@ -91,8 +175,7 @@ class PolicyNetworkAgent(Agent):
         max_steps = max(lengths)
 
         actions = np.zeros((batch_size, max_steps - 1), dtype=np.int32)
-        observations = np.zeros((batch_size, max_steps,
-                                 self.bvars.d_observations), dtype=np.float32)
+        observations = np.zeros([batch_size, max_steps]+self.bvars.d_observations, dtype=np.float32)
         rewards = np.zeros((batch_size, max_steps), dtype=np.float32)
         baselines = np.zeros((batch_size, max_steps - 1), dtype=np.float32)
 
@@ -190,10 +273,10 @@ class PolicyNetworkAgent(Agent):
 
 
 class PolicyGradientAgent(PolicyNetworkAgent):
-    def __init__(self, env, hidden_layers, learning_rate, baseline,
+    def __init__(self, env, hidden_layers, learning_rate, baseline,use_vscale_init,
                  init_session):
         PolicyNetworkAgent.__init__(self, env, hidden_layers, learning_rate,
-                                    baseline, init_session)
+                                    baseline, use_vscale_init, init_session)
 
     def setup(self):
         mask = tf.sequence_mask(self.bvars.lengths - 1, dtype=tf.float32)
@@ -223,14 +306,14 @@ class PolicyGradientAgent(PolicyNetworkAgent):
 
 class HindsightGradientAgent(PolicyNetworkAgent):
     def __init__(self, env, hidden_layers, learning_rate,
-                 per_decision, weighted, subgoals_per_episode, baseline,
+                 per_decision, weighted, subgoals_per_episode, baseline, use_vscale_init,
                  init_session):
         self.per_decision = per_decision
         self.weighted = weighted
         self.subgoals_per_episode = subgoals_per_episode
 
         PolicyNetworkAgent.__init__(self, env, hidden_layers, learning_rate,
-                                    baseline, init_session)
+                                    baseline, use_vscale_init, init_session)
 
     def setup(self):
         mask = tf.sequence_mask(self.bvars.lengths - 1, dtype=tf.float32)

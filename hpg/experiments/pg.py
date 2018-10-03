@@ -68,15 +68,16 @@ def config():
     eval_size = 128
 
     n_restarts = 2
+    use_vscale_init = False
 
 
 @ex.automain
 def main(seed, env_name, max_steps, use_hindsight, per_decision, weighted,
          subgoals_per_episode, policy_hidden_layers, policy_learning_rate,
          use_baseline, baseline_hidden_layers, baseline_learning_rate,
-         n_train_batches, batch_size, eval_freq, eval_size, n_restarts):
-    np.random.seed(seed)
-    tf.set_random_seed(seed)
+         n_train_batches, batch_size, eval_freq, eval_size, n_restarts,
+         use_vscale_init):
+
 
     experiment_folder = os.path.join(filepath, str(ex.current_run._id))
 
@@ -94,16 +95,22 @@ def main(seed, env_name, max_steps, use_hindsight, per_decision, weighted,
         agent = HindsightGradientAgent(env, policy_hidden_layers,
                                        policy_learning_rate,
                                        per_decision, weighted,
-                                       subgoals_per_episode, baseline,
+                                       subgoals_per_episode, baseline, use_vscale_init,
                                        init_session=False)
     else:
         agent = PolicyGradientAgent(env, policy_hidden_layers,
-                                    policy_learning_rate, baseline,
+                                    policy_learning_rate, baseline, use_vscale_init,
                                     init_session=False)
 
     ereturns, treturns, plosses, blosses = [], [], [], []
 
     for i in range(n_restarts):
+        np.random.seed(seed+i)
+        tf.set_random_seed(seed+i)
+        env.seed(seed+i)
+
+
+
         agent.init()
 
         stats = agent.train(n_train_batches, batch_size, eval_freq, eval_size)

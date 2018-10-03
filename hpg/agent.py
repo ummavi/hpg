@@ -2,20 +2,23 @@ import numpy as np
 
 
 class Episode:
-    def __init__(self, observation, goal, reward):
+    def __init__(self, observation, achieved_goal, goal, reward):
         self.length = 1
 
         self.observations = [observation]
+        self.achieved_goals = [achieved_goal]
+
         self.rewards = [reward]
         self.actions = []
 
         self.goal = goal
 
-    def append(self, action, observation, reward):
+    def append(self, action, observation, achieved_goal, reward):
         self.length += 1
 
         self.actions.append(action)
         self.observations.append(observation)
+        self.achieved_goals.append(achieved_goal)
         self.rewards.append(reward)
 
 
@@ -30,9 +33,9 @@ class Agent:
         episodes = []
 
         for i in range(n_episodes):
-            observation, goal, reward = self.env.reset()
+            observation, achieved_goal, goal, reward = self.env.reset()
 
-            episodes.append(Episode(observation, goal, reward))
+            episodes.append(Episode(observation, achieved_goal, goal, reward))
 
             if render:
                 print('Episode {0}.\n'.format(i + 1))
@@ -43,9 +46,9 @@ class Agent:
             while not done:
                 action = self.act(observation, goal, greedy)
 
-                observation, reward, done = self.env.step(action)
+                observation, achieved_goal, reward, done = self.env.step(action)
 
-                episodes[-1].append(action, observation, reward)
+                episodes[-1].append(action, observation, achieved_goal, reward)
 
                 if render:
                     self.env.render()
